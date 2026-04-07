@@ -69,12 +69,12 @@ object ClingDlnaRuntime {
             UDADeviceType("MediaRenderer", 1),
             DeviceDetails(
                 PlaybackManager.currentStateSnapshot().deviceName,
-                ManufacturerDetails("OpenClaw", "https://openclaw.local/"),
+                ManufacturerDetails("HANG's TV", "https://hangstv.local/"),
                 ModelDetails(
-                    "OpenClaw TV Receiver",
-                    "OpenClaw",
+                    "HANG's TV Receiver",
+                    "HANG's TV",
                     "0.1.0",
-                    "https://openclaw.local/",
+                    "https://hangstv.local/",
                 ),
             ),
             arrayOf(connectionManagerService, avTransportService, renderingService),

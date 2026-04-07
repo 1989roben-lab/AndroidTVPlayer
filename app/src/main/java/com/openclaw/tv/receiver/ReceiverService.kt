@@ -65,7 +65,7 @@ class ReceiverService : Service() {
             manager.createNotificationChannel(
                 NotificationChannel(
                     NOTIFICATION_CHANNEL_ID,
-                    "OpenClaw Receiver",
+                    "HANG's TV Receiver",
                     NotificationManager.IMPORTANCE_LOW,
                 ),
             )
@@ -75,8 +75,8 @@ class ReceiverService : Service() {
     }
 
     private fun buildNotification(): Notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-        .setContentTitle("OpenClaw TV Receiver")
-        .setContentText("Waiting for AirPlay or DLNA media")
+        .setContentTitle("HANG's TV")
+        .setContentText("Ready for AirPlay or DLNA")
         .setSmallIcon(R.drawable.ic_app_icon)
         .setOngoing(true)
         .setSilent(true)

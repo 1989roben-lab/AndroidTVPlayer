@@ -24,7 +24,7 @@ data class ReceiverPlaybackRequest(
 )
 
 data class ReceiverState(
-    val deviceName: String = "OpenClaw TV",
+    val deviceName: String = "HANG's TV",
     val localAddress: String = "",
     val serverPort: Int = ReceiverRuntime.SERVER_PORT,
     val airPlayReady: Boolean = false,
@@ -45,5 +45,5 @@ data class ReceiverState(
     val volumePercent: Int = 100,
     val muted: Boolean = false,
     val lastError: String? = null,
-    val receiverHint: String = "Open the app on TV, then look for OpenClaw TV in AirPlay or DLNA sender apps.",
+    val receiverHint: String = "Look for HANG's TV from your iPhone or any DLNA sender.",
 )

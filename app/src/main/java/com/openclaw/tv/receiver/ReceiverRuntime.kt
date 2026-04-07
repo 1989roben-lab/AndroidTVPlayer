@@ -34,7 +34,7 @@ object ReceiverRuntime {
         PlaybackManager.ensureInitialized(appContext)
 
         val localIp = resolveLocalIpv4Address().orEmpty()
-        val deviceName = "OpenClaw TV"
+        val deviceName = "HANG's TV"
 
         if (localIp.isBlank()) {
             Log.w("OpenClaw", "ReceiverRuntime.start no local IPv4 address")

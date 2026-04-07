@@ -21,7 +21,7 @@
         android:allowBackup="true"
         android:banner="@drawable/tv_banner"
         android:icon="@drawable/ic_app_icon"
-        android:label="OpenClaw TV Receiver"
+        android:label="HANG's TV"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.OpenClaw">

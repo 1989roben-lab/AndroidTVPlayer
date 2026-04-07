@@ -277,10 +277,10 @@ class ReceiverHttpServer(
           <device>
             <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
             <friendlyName>${PlaybackManager.state.value.deviceName}</friendlyName>
-            <manufacturer>OpenClaw</manufacturer>
-            <manufacturerURL>https://openclaw.local/</manufacturerURL>
-            <modelDescription>OpenClaw TV Receiver</modelDescription>
-            <modelName>OpenClaw TV Receiver</modelName>
+            <manufacturer>HANG's TV</manufacturer>
+            <manufacturerURL>https://hangstv.local/</manufacturerURL>
+            <modelDescription>HANG's TV Receiver</modelDescription>
+            <modelName>HANG's TV Receiver</modelName>
             <modelNumber>0.1.0</modelNumber>
             <presentationURL>http://$localIp:${ReceiverRuntime.SERVER_PORT}/dlna/device.xml</presentationURL>
             <UDN>uuid:${deviceUuid()}</UDN>
