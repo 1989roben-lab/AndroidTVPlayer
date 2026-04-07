@@ -11,7 +11,7 @@ class BootReceiver : BroadcastReceiver() {
             Intent.ACTION_MY_PACKAGE_REPLACED,
             "android.net.conn.CONNECTIVITY_CHANGE",
             null,
-            -> ReceiverService.start(context, refresh = true)
+            -> ReceiverService.start(context)
         }
     }
 }

@@ -39,9 +39,11 @@ data class ReceiverState(
     val isPlaying: Boolean = false,
     val durationMs: Long = 0L,
     val positionMs: Long = 0L,
+    val bufferedPositionMs: Long = 0L,
+    val seekPreviewPositionMs: Long? = null,
+    val controlsVisible: Boolean = false,
     val volumePercent: Int = 100,
     val muted: Boolean = false,
     val lastError: String? = null,
     val receiverHint: String = "Open the app on TV, then look for OpenClaw TV in AirPlay or DLNA sender apps.",
 )
-

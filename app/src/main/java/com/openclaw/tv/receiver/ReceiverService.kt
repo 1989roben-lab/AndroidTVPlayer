@@ -24,8 +24,10 @@ class ReceiverService : Service() {
         startForegroundIfNeeded()
         if (intent?.action == ACTION_REFRESH) {
             ReceiverRuntime.refresh(this)
-        } else {
+        } else if (!ReceiverRuntime.isStarted()) {
             ReceiverRuntime.start(this)
+        } else {
+            Log.i("OpenClaw", "ReceiverService.onStartCommand runtime already active")
         }
         return START_STICKY
     }

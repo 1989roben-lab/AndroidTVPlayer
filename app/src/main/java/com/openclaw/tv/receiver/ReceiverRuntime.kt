@@ -23,6 +23,8 @@ object ReceiverRuntime {
     private var nsdRegistration: NsdManager.RegistrationListener? = null
     private var multicastLock: WifiManager.MulticastLock? = null
 
+    fun isStarted(): Boolean = started.get()
+
     @Synchronized
     fun start(context: Context) {
         if (!started.compareAndSet(false, true)) return
@@ -118,6 +120,13 @@ object ReceiverRuntime {
     }
 
     private fun registerAirPlayMdns(context: Context, deviceName: String) {
+        runCatching {
+            nsdRegistration?.let { listener ->
+                nsdManager?.unregisterService(listener)
+            }
+        }
+        nsdRegistration = null
+
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = deviceName
             serviceType = "_airplay._tcp."

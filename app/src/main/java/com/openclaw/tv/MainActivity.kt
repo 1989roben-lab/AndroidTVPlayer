@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,7 +22,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -44,6 +44,7 @@ import com.openclaw.core.protocol.ProtocolStage
 import com.openclaw.core.protocol.builtInProtocolPlan
 import com.openclaw.tv.receiver.PlaybackManager
 import com.openclaw.tv.receiver.ReceiverMediaKind
+import com.openclaw.tv.receiver.ReceiverRuntime
 import com.openclaw.tv.receiver.ReceiverService
 import com.openclaw.tv.receiver.ReceiverState
 
@@ -52,10 +53,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Log.i("OpenClaw", "MainActivity.onCreate")
         PlaybackManager.ensureInitialized(applicationContext)
-        ReceiverService.start(applicationContext)
+        if (!ReceiverRuntime.isStarted()) {
+            ReceiverService.start(applicationContext)
+        }
         setContent {
             MaterialTheme {
-                Surface {
+                Surface(color = Color.Black) {
                     val state by PlaybackManager.state.collectAsState()
                     DashboardScreen(
                         protocols = builtInProtocolPlan(),
@@ -205,6 +208,10 @@ private fun FullscreenPlaybackScreen(state: ReceiverState) {
         state.mediaKind == ReceiverMediaKind.Image -> 1f
         else -> 0f
     }
+    val bufferedProgress = when {
+        state.durationMs > 0L -> (state.bufferedPositionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f)
+        else -> 0f
+    }
 
     Box(
         modifier = Modifier
@@ -224,34 +231,20 @@ private fun FullscreenPlaybackScreen(state: ReceiverState) {
             ReceiverMediaKind.Idle -> Unit
         }
 
-        Column(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .safeDrawingPadding()
-                .padding(24.dp)
-                .background(Color(0x7A000000), RoundedCornerShape(18.dp))
-                .padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
+        state.title?.takeIf { it.isNotBlank() }?.let { title ->
             Text(
-                text = state.activeProtocol?.label ?: "OpenClaw TV",
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-            )
-            Text(
-                text = state.title ?: "Receiving media",
+                text = title,
                 color = Color.White,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "${state.positionMs / 1000}s / ${state.durationMs / 1000}s",
-                color = Color(0xFFD7E3F4),
-                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .safeDrawingPadding()
+                    .padding(horizontal = 24.dp, vertical = 24.dp),
             )
         }
 
-        if (state.mediaKind != ReceiverMediaKind.Image) {
+        if (state.mediaKind != ReceiverMediaKind.Image && state.controlsVisible) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -260,30 +253,45 @@ private fun FullscreenPlaybackScreen(state: ReceiverState) {
                     .padding(horizontal = 24.dp, vertical = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                LinearProgressIndicator(
-                    progress = { progress },
+                Text(
+                    text = "${formatPlaybackTime(state.positionMs)} / ${formatPlaybackTime(state.durationMs)}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(6.dp),
-                    trackColor = Color(0x66FFFFFF),
-                    color = Color(0xFFFFB300),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                        .height(8.dp)
+                        .background(Color(0x33000000), RoundedCornerShape(999.dp)),
                 ) {
-                    Text(
-                        text = formatPlaybackTime(state.positionMs),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium,
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(bufferedProgress)
+                            .background(Color(0xFF3A3A3A), RoundedCornerShape(999.dp)),
                     )
-                    Text(
-                        text = formatPlaybackTime(state.durationMs),
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium,
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progress)
+                            .background(Color(0xFFFFB300), RoundedCornerShape(999.dp)),
                     )
                 }
             }
+        }
+
+        state.seekPreviewPositionMs?.let { seekPreviewPositionMs ->
+            Text(
+                text = "跳转到 ${formatPlaybackTime(seekPreviewPositionMs)}",
+                color = Color.White,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color(0x9A000000), RoundedCornerShape(18.dp))
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+            )
         }
     }
 }

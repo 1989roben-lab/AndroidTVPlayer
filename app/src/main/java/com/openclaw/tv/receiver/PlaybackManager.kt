@@ -31,6 +31,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 object PlaybackManager {
     private const val TAG = "OpenClawPlayback"
     private const val SEEK_COMMIT_DELAY_MS = 220L
+    private const val SEEK_PREVIEW_DISMISS_DELAY_MS = 900L
+    private const val CONTROLS_DISMISS_DELAY_MS = 5_000L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val initialized = AtomicBoolean(false)
     private val handler = Handler(Looper.getMainLooper())
@@ -50,6 +52,7 @@ object PlaybackManager {
                 _state.value = _state.value.copy(
                     positionMs = displayPosition,
                     durationMs = exoPlayer.duration.takeIf { it > 0L } ?: 0L,
+                    bufferedPositionMs = exoPlayer.bufferedPosition.coerceAtLeast(0L),
                     isPlaying = exoPlayer.isPlaying,
                 )
                 handler.postDelayed(this, 1000L)
@@ -63,6 +66,14 @@ object PlaybackManager {
             exoPlayer.seekTo(target)
         }
         pendingSeekPositionMs = null
+        handler.removeCallbacks(clearSeekPreviewRunnable)
+        handler.postDelayed(clearSeekPreviewRunnable, SEEK_PREVIEW_DISMISS_DELAY_MS)
+    }
+    private val clearSeekPreviewRunnable = Runnable {
+        _state.value = _state.value.copy(seekPreviewPositionMs = null)
+    }
+    private val hideControlsRunnable = Runnable {
+        _state.value = _state.value.copy(controlsVisible = false)
     }
 
     val airPlayDeviceId: String
@@ -226,6 +237,8 @@ object PlaybackManager {
     fun stop() {
         handler.post {
             handler.removeCallbacks(commitSeekRunnable)
+            handler.removeCallbacks(clearSeekPreviewRunnable)
+            handler.removeCallbacks(hideControlsRunnable)
             pendingSeekPositionMs = null
             if (::exoPlayer.isInitialized) {
                 exoPlayer.stop()
@@ -239,6 +252,9 @@ object PlaybackManager {
                 isPlaying = false,
                 positionMs = 0L,
                 durationMs = 0L,
+                bufferedPositionMs = 0L,
+                seekPreviewPositionMs = null,
+                controlsVisible = false,
                 serviceMessage = "Waiting for AirPlay or DLNA media",
                 lastError = null,
             )
@@ -253,9 +269,16 @@ object PlaybackManager {
                 durationMs?.let { desired.coerceAtMost(it) } ?: desired
             }
             pendingSeekPositionMs = target
-            _state.value = _state.value.copy(positionMs = target)
+            _state.value = _state.value.copy(
+                positionMs = target,
+                seekPreviewPositionMs = target,
+                controlsVisible = true,
+            )
             handler.removeCallbacks(commitSeekRunnable)
+            handler.removeCallbacks(clearSeekPreviewRunnable)
+            handler.removeCallbacks(hideControlsRunnable)
             handler.postDelayed(commitSeekRunnable, SEEK_COMMIT_DELAY_MS)
+            handler.postDelayed(hideControlsRunnable, CONTROLS_DISMISS_DELAY_MS)
         }
     }
 
@@ -268,9 +291,16 @@ object PlaybackManager {
                 durationMs?.let { desired.coerceAtMost(it) } ?: desired
             }
             pendingSeekPositionMs = target
-            _state.value = _state.value.copy(positionMs = target)
+            _state.value = _state.value.copy(
+                positionMs = target,
+                seekPreviewPositionMs = target,
+                controlsVisible = true,
+            )
             handler.removeCallbacks(commitSeekRunnable)
+            handler.removeCallbacks(clearSeekPreviewRunnable)
+            handler.removeCallbacks(hideControlsRunnable)
             handler.postDelayed(commitSeekRunnable, SEEK_COMMIT_DELAY_MS)
+            handler.postDelayed(hideControlsRunnable, CONTROLS_DISMISS_DELAY_MS)
         }
     }
 
