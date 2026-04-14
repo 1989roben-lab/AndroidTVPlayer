@@ -1,6 +1,7 @@
 package com.openclaw.tv.receiver.dlna;
 
 import com.openclaw.tv.receiver.PlaybackManager;
+import com.openclaw.tv.receiver.ReceiverPlaybackRequest;
 import com.openclaw.tv.receiver.ReceiverMediaKind;
 import com.openclaw.tv.receiver.ReceiverState;
 import org.fourthline.cling.model.ModelUtil;
@@ -22,11 +23,46 @@ final class OpenClawDlnaSupport {
     }
 
     static void prepareRequest(String uri, String metadata) {
+        android.util.Log.d("OpenClawDlna", "prepareRequest uri=" + uri);
         PlaybackManager.INSTANCE.prepareDlnaRequest(
                 uri,
                 extractTitle(metadata, uri),
                 extractMimeType(metadata)
         );
+    }
+
+    static void prepareNextRequest(String uri, String metadata) {
+        if (uri == null || uri.isEmpty()) {
+            return;
+        }
+        android.util.Log.d("OpenClawDlna", "prepareNextRequest uri=" + uri);
+        PlaybackManager.INSTANCE.prepareNextDlnaRequest(
+                uri,
+                extractTitle(metadata, uri),
+                extractMimeType(metadata)
+        );
+    }
+
+    static String currentTrackMetadata() {
+        ReceiverState state = PlaybackManager.INSTANCE.currentStateSnapshot();
+        String uri = state.getUri() != null ? state.getUri() : "";
+        if (uri.isEmpty()) {
+            return "NOT_IMPLEMENTED";
+        }
+        return buildMetadata(uri, state.getTitle(), state.getMimeType());
+    }
+
+    static String nextTrackUri() {
+        ReceiverPlaybackRequest request = PlaybackManager.INSTANCE.pendingNextDlnaRequestSnapshot();
+        return request != null ? request.getUri() : "NOT_IMPLEMENTED";
+    }
+
+    static String nextTrackMetadata() {
+        ReceiverPlaybackRequest request = PlaybackManager.INSTANCE.pendingNextDlnaRequestSnapshot();
+        if (request == null) {
+            return "NOT_IMPLEMENTED";
+        }
+        return buildMetadata(request.getUri(), request.getTitle(), request.getMimeType());
     }
 
     static void syncTransport(AVTransport transport) {
@@ -138,5 +174,29 @@ final class OpenClawDlnaSupport {
         }
         Matcher matcher = Pattern.compile("<" + tag + "[^>]*" + attribute + "=\"([^\"]+)\"[^>]*>", Pattern.CASE_INSENSITIVE).matcher(xml);
         return matcher.find() ? matcher.group(1).trim() : null;
+    }
+
+    private static String buildMetadata(String uri, String title, String mimeType) {
+        String safeTitle = escapeXml(title != null && !title.isEmpty() ? title : extractTitle(null, uri));
+        String safeUri = escapeXml(uri);
+        String safeMime = escapeXml(mimeType != null && !mimeType.isEmpty() ? mimeType : "video/mp4");
+        return ""
+                + "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" "
+                + "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
+                + "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">"
+                + "<item id=\"0\" parentID=\"0\" restricted=\"1\">"
+                + "<dc:title>" + safeTitle + "</dc:title>"
+                + "<res protocolInfo=\"http-get:*:" + safeMime + ":*\">" + safeUri + "</res>"
+                + "</item>"
+                + "</DIDL-Lite>";
+    }
+
+    private static String escapeXml(String value) {
+        return value
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;");
     }
 }

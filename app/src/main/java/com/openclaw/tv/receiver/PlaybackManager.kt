@@ -44,6 +44,7 @@ object PlaybackManager {
     val state: StateFlow<ReceiverState> = _state.asStateFlow()
 
     private var pendingDlnaRequest: ReceiverPlaybackRequest? = null
+    private var pendingNextDlnaRequest: ReceiverPlaybackRequest? = null
     private var pendingSeekPositionMs: Long? = null
     private val positionTicker = object : Runnable {
         override fun run() {
@@ -116,7 +117,10 @@ object PlaybackManager {
                         val message = when (playbackState) {
                             Player.STATE_BUFFERING -> "Buffering media"
                             Player.STATE_READY -> "Ready for playback"
-                            Player.STATE_ENDED -> "Playback finished"
+                            Player.STATE_ENDED -> {
+                                playNextDlnaRequestIfAvailable()
+                                "Playback finished"
+                            }
                             else -> _state.value.serviceMessage
                         }
                         _state.value = _state.value.copy(serviceMessage = message)
@@ -171,11 +175,40 @@ object PlaybackManager {
         )
     }
 
+    fun prepareNextDlnaRequest(request: ReceiverPlaybackRequest) {
+        pendingNextDlnaRequest = request
+        Log.d(TAG, "prepared next DLNA request uri=${request.uri}")
+    }
+
+    fun prepareNextDlnaRequest(uri: String, title: String?, mimeType: String?) {
+        prepareNextDlnaRequest(
+            ReceiverPlaybackRequest(
+                uri = uri,
+                title = title,
+                mimeType = mimeType,
+            ),
+        )
+    }
+
     fun playPreparedDlnaRequest() {
         pendingDlnaRequest?.let { play(it, ReceiverProtocol.Dlna) }
     }
 
     fun hasPendingDlnaRequest(): Boolean = pendingDlnaRequest != null
+
+    fun hasPendingNextDlnaRequest(): Boolean = pendingNextDlnaRequest != null
+
+    fun pendingNextDlnaRequestSnapshot(): ReceiverPlaybackRequest? = pendingNextDlnaRequest
+
+    fun playNextDlnaRequestIfAvailable() {
+        val request = pendingNextDlnaRequest ?: return
+        pendingNextDlnaRequest = null
+        pendingDlnaRequest = request
+        handler.post {
+            Log.d(TAG, "playNextDlnaRequestIfAvailable uri=${request.uri}")
+            play(request, ReceiverProtocol.Dlna)
+        }
+    }
 
     fun play(request: ReceiverPlaybackRequest, protocol: ReceiverProtocol) {
         ensureInitialized(appContext)
@@ -240,6 +273,7 @@ object PlaybackManager {
             handler.removeCallbacks(clearSeekPreviewRunnable)
             handler.removeCallbacks(hideControlsRunnable)
             pendingSeekPositionMs = null
+            pendingNextDlnaRequest = null
             if (::exoPlayer.isInitialized) {
                 exoPlayer.stop()
             }

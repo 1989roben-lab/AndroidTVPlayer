@@ -1,5 +1,6 @@
 package com.openclaw.tv.receiver.dlna;
 
+import android.util.Log;
 import com.openclaw.tv.receiver.PlaybackManager;
 import com.openclaw.tv.receiver.ReceiverMediaKind;
 import com.openclaw.tv.receiver.ReceiverState;
@@ -55,13 +56,14 @@ import org.fourthline.cling.support.model.TransportStatus;
         @UpnpStateVariable(name = "AbsoluteTimePosition", sendEvents = false, datatype = "string"),
         @UpnpStateVariable(name = "RelativeCounterPosition", sendEvents = false, datatype = "i4", defaultValue = "2147483647"),
         @UpnpStateVariable(name = "AbsoluteCounterPosition", sendEvents = false, datatype = "i4", defaultValue = "2147483647"),
-        @UpnpStateVariable(name = "CurrentTransportActions", sendEvents = false, datatype = "string", defaultValue = "Play,Stop,Pause,Seek"),
+        @UpnpStateVariable(name = "CurrentTransportActions", sendEvents = false, datatype = "string", defaultValue = "Play,Stop,Pause,Seek,Next"),
         @UpnpStateVariable(name = "A_ARG_TYPE_SeekMode", sendEvents = false, datatype = "string"),
         @UpnpStateVariable(name = "A_ARG_TYPE_SeekTarget", sendEvents = false, datatype = "string"),
         @UpnpStateVariable(name = "A_ARG_TYPE_InstanceID", sendEvents = false, datatype = "ui4"),
         @UpnpStateVariable(name = "LastChange", datatype = "string", defaultValue = "", sendEvents = true)
 })
 public class OpenClawAVTransportService {
+    private static final String TAG = "OpenClawAVTransport";
     private String lastChange = "";
 
     public String getLastChange() {
@@ -73,6 +75,7 @@ public class OpenClawAVTransportService {
                                   @UpnpInputArgument(name = "CurrentURI", stateVariable = "AVTransportURI") String currentURI,
                                   @UpnpInputArgument(name = "CurrentURIMetaData", stateVariable = "AVTransportURIMetaData") String currentURIMetaData)
             throws AVTransportException {
+        Log.d(TAG, "setAVTransportURI uri=" + currentURI);
         OpenClawDlnaSupport.prepareRequest(currentURI, currentURIMetaData);
     }
 
@@ -80,6 +83,8 @@ public class OpenClawAVTransportService {
     public void setNextAVTransportURI(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId,
                                       @UpnpInputArgument(name = "NextURI", stateVariable = "AVTransportURI") String nextURI,
                                       @UpnpInputArgument(name = "NextURIMetaData", stateVariable = "AVTransportURIMetaData") String nextURIMetaData) {
+        Log.d(TAG, "setNextAVTransportURI uri=" + nextURI);
+        OpenClawDlnaSupport.prepareNextRequest(nextURI, nextURIMetaData);
     }
 
     @UpnpAction(out = {
@@ -153,12 +158,14 @@ public class OpenClawAVTransportService {
 
     @UpnpAction
     public void stop(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
+        Log.d(TAG, "stop");
         PlaybackManager.INSTANCE.stop();
     }
 
     @UpnpAction
     public void play(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId,
                      @UpnpInputArgument(name = "Speed", stateVariable = "TransportPlaySpeed") String speed) {
+        Log.d(TAG, "play speed=" + speed + " pending=" + PlaybackManager.INSTANCE.hasPendingDlnaRequest());
         ReceiverState state = PlaybackManager.INSTANCE.currentStateSnapshot();
         if (PlaybackManager.INSTANCE.hasPendingDlnaRequest() &&
                 (state.getMediaKind() == ReceiverMediaKind.Idle || !state.isPlaying())) {
@@ -170,6 +177,7 @@ public class OpenClawAVTransportService {
 
     @UpnpAction
     public void pause(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
+        Log.d(TAG, "pause");
         PlaybackManager.INSTANCE.pause();
     }
 
@@ -181,11 +189,14 @@ public class OpenClawAVTransportService {
     public void seek(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId,
                      @UpnpInputArgument(name = "Unit", stateVariable = "A_ARG_TYPE_SeekMode") String unit,
                      @UpnpInputArgument(name = "Target", stateVariable = "A_ARG_TYPE_SeekTarget") String target) {
+        Log.d(TAG, "seek unit=" + unit + " target=" + target);
         PlaybackManager.INSTANCE.seekTo(OpenClawDlnaSupport.parseTargetMillis(target));
     }
 
     @UpnpAction
     public void next(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
+        Log.d(TAG, "next pending=" + PlaybackManager.INSTANCE.hasPendingNextDlnaRequest());
+        PlaybackManager.INSTANCE.playNextDlnaRequestIfAvailable();
     }
 
     @UpnpAction
@@ -194,7 +205,7 @@ public class OpenClawAVTransportService {
 
     @UpnpAction(out = @UpnpOutputArgument(name = "Actions", stateVariable = "CurrentTransportActions"))
     public String getCurrentTransportActions(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
-        return "Play,Stop,Pause,Seek";
+        return "Play,Stop,Pause,Seek,Next";
     }
 
     @UpnpAction
@@ -210,13 +221,15 @@ public class OpenClawAVTransportService {
     private MediaInfo snapshotMediaInfo() {
         ReceiverState state = PlaybackManager.INSTANCE.currentStateSnapshot();
         String uri = state.getUri() != null ? state.getUri() : "";
-        String metadata = "NOT_IMPLEMENTED";
+        String metadata = OpenClawDlnaSupport.currentTrackMetadata();
+        String nextUri = OpenClawDlnaSupport.nextTrackUri();
+        String nextMetadata = OpenClawDlnaSupport.nextTrackMetadata();
         long durationSeconds = Math.max(0L, state.getDurationMs() / 1000L);
         return new MediaInfo(
                 uri,
                 metadata,
-                "NOT_IMPLEMENTED",
-                "NOT_IMPLEMENTED",
+                nextUri,
+                nextMetadata,
                 new UnsignedIntegerFourBytes(uri.isEmpty() ? 0 : 1),
                 ModelUtil.toTimeString(durationSeconds),
                 StorageMedium.NETWORK
