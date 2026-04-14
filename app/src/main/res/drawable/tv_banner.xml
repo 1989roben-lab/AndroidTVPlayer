@@ -1,51 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item>
-        <shape android:shape="rectangle">
-            <gradient
-                android:angle="0"
-                android:endColor="#040506"
-                android:startColor="#2A2E35" />
-            <corners android:radius="22dp" />
-        </shape>
-    </item>
-
-    <item
-        android:left="36dp"
-        android:top="18dp"
-        android:right="36dp"
-        android:bottom="18dp">
-        <shape android:shape="rectangle">
-            <gradient
-                android:angle="270"
-                android:endColor="#12151B"
-                android:startColor="#3B4049" />
-            <corners android:radius="18dp" />
-        </shape>
-    </item>
-
-    <item
-        android:left="36dp"
-        android:top="18dp"
-        android:right="36dp"
-        android:bottom="58dp">
-        <shape android:shape="rectangle">
-            <gradient
-                android:angle="270"
-                android:endColor="#00FFFFFF"
-                android:startColor="#42FFFFFF" />
-            <corners
-                android:topLeftRadius="18dp"
-                android:topRightRadius="18dp"
-                android:bottomLeftRadius="46dp"
-                android:bottomRightRadius="46dp" />
-        </shape>
-    </item>
-
-    <item
-        android:left="84dp"
-        android:top="34dp"
-        android:right="84dp"
-        android:bottom="34dp"
-        android:drawable="@drawable/ic_app_mark" />
-</layer-list>
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@drawable/duck_banner"
+    android:antialias="true"
+    android:filter="true"
+    android:gravity="center" />
