@@ -1,9 +1,12 @@
 package com.openclaw.tv.receiver.dlna;
 
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import com.openclaw.tv.receiver.PlaybackManager;
 import com.openclaw.tv.receiver.ReceiverMediaKind;
 import com.openclaw.tv.receiver.ReceiverState;
+import org.fourthline.cling.model.ServiceManager;
 import org.fourthline.cling.binding.annotations.UpnpAction;
 import org.fourthline.cling.binding.annotations.UpnpInputArgument;
 import org.fourthline.cling.binding.annotations.UpnpOutputArgument;
@@ -64,9 +67,55 @@ import org.fourthline.cling.support.model.TransportStatus;
 })
 public class OpenClawAVTransportService {
     private static final String TAG = "OpenClawAVTransport";
-    private String lastChange = "";
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static volatile ServiceManager<OpenClawAVTransportService> serviceManager;
+
+    private String lastChange = buildLastChange(PlaybackManager.INSTANCE.currentStateSnapshot());
+
+    public static void bindServiceManager(ServiceManager<OpenClawAVTransportService> manager) {
+        serviceManager = manager;
+        publishStateChangeSoon();
+    }
+
+    public static void publishStateChangeSoon() {
+        publishStateChangeDelayed(0L);
+        publishStateChangeDelayed(350L);
+    }
+
+    public static void publishPositionChangeSoon() {
+        publishStateChangeDelayed(0L);
+    }
+
+    private static void publishStateChangeDelayed(long delayMs) {
+        ServiceManager<OpenClawAVTransportService> manager = serviceManager;
+        if (manager == null) {
+            return;
+        }
+        MAIN_HANDLER.postDelayed(() -> {
+            ServiceManager<OpenClawAVTransportService> currentManager = serviceManager;
+            if (currentManager == null) {
+                return;
+            }
+            try {
+                OpenClawAVTransportService service = currentManager.getImplementation();
+                String oldValue = service.lastChange;
+                String newValue = service.refreshLastChange();
+                currentManager.getPropertyChangeSupport().firePropertyChange("LastChange", oldValue, newValue);
+                ReceiverState state = PlaybackManager.INSTANCE.currentStateSnapshot();
+                Log.d(
+                        TAG,
+                        "publishLastChange state=" + OpenClawDlnaSupport.currentTransportState(state).getValue()
+                                + " positionMs=" + state.getPositionMs()
+                                + " durationMs=" + state.getDurationMs()
+                );
+            } catch (Exception error) {
+                Log.w(TAG, "publishLastChange failed: " + error.getMessage(), error);
+            }
+        }, delayMs);
+    }
 
     public String getLastChange() {
+        refreshLastChange();
         return lastChange;
     }
 
@@ -77,6 +126,7 @@ public class OpenClawAVTransportService {
             throws AVTransportException {
         Log.d(TAG, "setAVTransportURI uri=" + currentURI);
         OpenClawDlnaSupport.prepareRequest(currentURI, currentURIMetaData);
+        publishStateChangeSoon();
     }
 
     @UpnpAction
@@ -85,6 +135,7 @@ public class OpenClawAVTransportService {
                                       @UpnpInputArgument(name = "NextURIMetaData", stateVariable = "AVTransportURIMetaData") String nextURIMetaData) {
         Log.d(TAG, "setNextAVTransportURI uri=" + nextURI);
         OpenClawDlnaSupport.prepareNextRequest(nextURI, nextURIMetaData);
+        publishStateChangeSoon();
     }
 
     @UpnpAction(out = {
@@ -124,7 +175,7 @@ public class OpenClawAVTransportService {
     public PositionInfo getPositionInfo(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
         ReceiverState state = PlaybackManager.INSTANCE.currentStateSnapshot();
         String uri = state.getUri() != null ? state.getUri() : "";
-        String metadata = "NOT_IMPLEMENTED";
+        String metadata = OpenClawDlnaSupport.currentTrackMetadata();
         long durationSeconds = Math.max(0L, state.getDurationMs() / 1000L);
         long positionSeconds = Math.max(0L, state.getPositionMs() / 1000L);
         return new PositionInfo(
@@ -160,6 +211,7 @@ public class OpenClawAVTransportService {
     public void stop(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
         Log.d(TAG, "stop");
         PlaybackManager.INSTANCE.stop();
+        publishStateChangeSoon();
     }
 
     @UpnpAction
@@ -173,12 +225,14 @@ public class OpenClawAVTransportService {
         } else {
             PlaybackManager.INSTANCE.resume();
         }
+        publishStateChangeSoon();
     }
 
     @UpnpAction
     public void pause(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
         Log.d(TAG, "pause");
         PlaybackManager.INSTANCE.pause();
+        publishStateChangeSoon();
     }
 
     @UpnpAction
@@ -191,12 +245,14 @@ public class OpenClawAVTransportService {
                      @UpnpInputArgument(name = "Target", stateVariable = "A_ARG_TYPE_SeekTarget") String target) {
         Log.d(TAG, "seek unit=" + unit + " target=" + target);
         PlaybackManager.INSTANCE.seekTo(OpenClawDlnaSupport.parseTargetMillis(target));
+        publishStateChangeSoon();
     }
 
     @UpnpAction
     public void next(@UpnpInputArgument(name = "InstanceID") UnsignedIntegerFourBytes instanceId) {
         Log.d(TAG, "next pending=" + PlaybackManager.INSTANCE.hasPendingNextDlnaRequest());
         PlaybackManager.INSTANCE.playNextDlnaRequestIfAvailable();
+        publishStateChangeSoon();
     }
 
     @UpnpAction
@@ -234,5 +290,49 @@ public class OpenClawAVTransportService {
                 ModelUtil.toTimeString(durationSeconds),
                 StorageMedium.NETWORK
         );
+    }
+
+    private String refreshLastChange() {
+        lastChange = buildLastChange(PlaybackManager.INSTANCE.currentStateSnapshot());
+        return lastChange;
+    }
+
+    private static String buildLastChange(ReceiverState state) {
+        String uri = state.getUri() != null ? state.getUri() : "";
+        String metadata = OpenClawDlnaSupport.currentTrackMetadata();
+        String nextUri = OpenClawDlnaSupport.nextTrackUri();
+        String nextMetadata = OpenClawDlnaSupport.nextTrackMetadata();
+        String duration = formatDuration(state.getDurationMs());
+        String position = formatDuration(state.getPositionMs());
+        int track = uri.isEmpty() ? 0 : 1;
+        return ""
+                + "<Event xmlns=\"urn:schemas-upnp-org:metadata-1-0/AVT/\">"
+                + "<InstanceID val=\"0\">"
+                + lastChangeValue("TransportState", OpenClawDlnaSupport.currentTransportState(state).getValue())
+                + lastChangeValue("TransportStatus", "OK")
+                + lastChangeValue("CurrentTransportActions", "Play,Stop,Pause,Seek,Next")
+                + lastChangeValue("TransportPlaySpeed", "1")
+                + lastChangeValue("NumberOfTracks", track > 0 ? "1" : "0")
+                + lastChangeValue("CurrentTrack", String.valueOf(track))
+                + lastChangeValue("CurrentTrackDuration", duration)
+                + lastChangeValue("CurrentMediaDuration", duration)
+                + lastChangeValue("CurrentTrackMetaData", metadata)
+                + lastChangeValue("CurrentTrackURI", uri)
+                + lastChangeValue("AVTransportURI", uri)
+                + lastChangeValue("AVTransportURIMetaData", metadata)
+                + lastChangeValue("NextAVTransportURI", nextUri)
+                + lastChangeValue("NextAVTransportURIMetaData", nextMetadata)
+                + lastChangeValue("RelativeTimePosition", position)
+                + lastChangeValue("AbsoluteTimePosition", position)
+                + "</InstanceID>"
+                + "</Event>";
+    }
+
+    private static String lastChangeValue(String name, String value) {
+        return "<" + name + " val=\"" + OpenClawDlnaSupport.escapeXml(value) + "\"/>";
+    }
+
+    private static String formatDuration(long millis) {
+        return ModelUtil.toTimeString(Math.max(0L, millis / 1000L));
     }
 }

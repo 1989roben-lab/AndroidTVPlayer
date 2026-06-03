@@ -53,6 +53,7 @@ object ClingDlnaRuntime {
         ) {
             override fun createServiceInstance(): OpenClawAVTransportService = OpenClawAVTransportService()
         }
+        OpenClawAVTransportService.bindServiceManager(avTransportService.manager)
 
         @Suppress("UNCHECKED_CAST")
         val renderingService: LocalService<OpenClawAudioRenderingControl> =
@@ -108,6 +109,7 @@ object ClingDlnaRuntime {
         }
         localDevice = null
 
+        OpenClawAVTransportService.bindServiceManager(null)
         upnpService?.shutdown()
         upnpService = null
     }

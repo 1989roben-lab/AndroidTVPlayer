@@ -70,7 +70,7 @@ final class OpenClawDlnaSupport {
     static void syncTransport(AVTransport transport) {
         ReceiverState state = PlaybackManager.INSTANCE.currentStateSnapshot();
         String uri = state.getUri() != null ? state.getUri() : "";
-        String metadata = "NOT_IMPLEMENTED";
+        String metadata = currentTrackMetadata();
         long durationSeconds = Math.max(0L, state.getDurationMs() / 1000L);
         long positionSeconds = Math.max(0L, state.getPositionMs() / 1000L);
 
@@ -105,7 +105,7 @@ final class OpenClawDlnaSupport {
         if (state.isPlaying()) {
             return TransportState.PLAYING;
         }
-        return TransportState.STOPPED;
+        return TransportState.PAUSED_PLAYBACK;
     }
 
     static long parseTargetMillis(String target) {
@@ -193,7 +193,10 @@ final class OpenClawDlnaSupport {
                 + "</DIDL-Lite>";
     }
 
-    private static String escapeXml(String value) {
+    static String escapeXml(String value) {
+        if (value == null) {
+            return "";
+        }
         return value
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")

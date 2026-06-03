@@ -16,6 +16,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import com.openclaw.tv.MainActivity
+import com.openclaw.tv.receiver.dlna.OpenClawAVTransportService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,6 +67,7 @@ object PlaybackManager {
                     bufferedPositionMs = displayBufferedPosition,
                     isPlaying = exoPlayer.isPlaying,
                 )
+                notifyDlnaPositionChanged()
                 handler.postDelayed(this, 1000L)
             }
         }
@@ -79,6 +81,7 @@ object PlaybackManager {
         }
         pendingSeekPositionMs = null
         pendingSeekAddsTimelineOffset = false
+        notifyDlnaStateChanged()
         handler.removeCallbacks(clearSeekPreviewRunnable)
         handler.postDelayed(clearSeekPreviewRunnable, SEEK_PREVIEW_DISMISS_DELAY_MS)
     }
@@ -125,6 +128,7 @@ object PlaybackManager {
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         Log.d(TAG, "onIsPlayingChanged=$isPlaying")
                         _state.value = _state.value.copy(isPlaying = isPlaying)
+                        notifyDlnaStateChanged()
                     }
 
                     override fun onPlaybackStateChanged(playbackState: Int) {
@@ -143,6 +147,7 @@ object PlaybackManager {
                             else -> _state.value.serviceMessage
                         }
                         _state.value = _state.value.copy(serviceMessage = message)
+                        notifyDlnaStateChanged()
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
@@ -169,6 +174,7 @@ object PlaybackManager {
                                 lastError = error.errorCodeName,
                                 serviceMessage = "Playback error: ${error.errorCodeName}",
                             )
+                            notifyDlnaStateChanged()
                         }
                     }
                 })
@@ -206,6 +212,7 @@ object PlaybackManager {
             mimeType = request.mimeType,
             lastError = null,
         )
+        notifyDlnaStateChanged()
         if (shouldAutoPlay) {
             awaitingAutoNextUntilMs = 0L
             handler.removeCallbacks(closeAutoNextWindowRunnable)
@@ -314,6 +321,7 @@ object PlaybackManager {
                 serviceMessage = "${protocol.label} image received",
                 lastError = null,
             )
+            notifyDlnaStateChanged()
         }
     }
 
@@ -322,6 +330,7 @@ object PlaybackManager {
             if (::exoPlayer.isInitialized) {
                 exoPlayer.pause()
                 _state.value = _state.value.copy(isPlaying = false)
+                notifyDlnaStateChanged()
             }
         }
     }
@@ -332,6 +341,7 @@ object PlaybackManager {
             if (::exoPlayer.isInitialized) {
                 exoPlayer.play()
                 _state.value = _state.value.copy(isPlaying = true)
+                notifyDlnaStateChanged()
             }
         }
     }
@@ -368,6 +378,7 @@ object PlaybackManager {
                 serviceMessage = "Waiting for AirPlay or DLNA media",
                 lastError = null,
             )
+            notifyDlnaStateChanged()
         }
     }
 
@@ -386,6 +397,7 @@ object PlaybackManager {
                 seekPreviewPositionMs = target,
                 controlsVisible = true,
             )
+            notifyDlnaStateChanged()
             handler.removeCallbacks(commitSeekRunnable)
             handler.removeCallbacks(clearSeekPreviewRunnable)
             handler.removeCallbacks(hideControlsRunnable)
@@ -410,6 +422,7 @@ object PlaybackManager {
                 seekPreviewPositionMs = target,
                 controlsVisible = true,
             )
+            notifyDlnaStateChanged()
             handler.removeCallbacks(commitSeekRunnable)
             handler.removeCallbacks(clearSeekPreviewRunnable)
             handler.removeCallbacks(hideControlsRunnable)
@@ -456,6 +469,7 @@ object PlaybackManager {
             serviceMessage = "${protocol.label} image loaded",
             lastError = null,
         )
+        notifyDlnaStateChanged()
     }
 
     private suspend fun playStream(
@@ -525,6 +539,7 @@ object PlaybackManager {
             serviceMessage = "${protocol.label} playback started",
             lastError = null,
         )
+        notifyDlnaStateChanged()
     }
 
     private fun bringPlayerToFront() {
@@ -533,6 +548,18 @@ object PlaybackManager {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             },
         )
+    }
+
+    private fun notifyDlnaStateChanged() {
+        if (_state.value.activeProtocol == ReceiverProtocol.Dlna) {
+            OpenClawAVTransportService.publishStateChangeSoon()
+        }
+    }
+
+    private fun notifyDlnaPositionChanged() {
+        if (_state.value.activeProtocol == ReceiverProtocol.Dlna && _state.value.mediaKind != ReceiverMediaKind.Idle) {
+            OpenClawAVTransportService.publishPositionChangeSoon()
+        }
     }
 }
 
