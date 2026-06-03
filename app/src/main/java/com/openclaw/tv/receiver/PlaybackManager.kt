@@ -8,10 +8,10 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -46,14 +46,24 @@ object PlaybackManager {
     private var pendingDlnaRequest: ReceiverPlaybackRequest? = null
     private var pendingNextDlnaRequest: ReceiverPlaybackRequest? = null
     private var pendingSeekPositionMs: Long? = null
+    private var pendingSeekAddsTimelineOffset: Boolean = false
+    private var activePlayback: ActivePlayback? = null
+    private var awaitingAutoNextUntilMs: Long = 0L
+    private val retriedPlaybackUris = mutableSetOf<String>()
     private val positionTicker = object : Runnable {
         override fun run() {
             if (::exoPlayer.isInitialized) {
-                val displayPosition = pendingSeekPositionMs ?: exoPlayer.currentPosition.coerceAtLeast(0L)
+                val offsetMs = activePlayback?.timelineOffsetMs ?: 0L
+                val displayPosition = pendingSeekPositionMs ?: (exoPlayer.currentPosition - offsetMs).coerceAtLeast(0L)
+                val displayDuration = exoPlayer.duration
+                    .takeIf { it > 0L }
+                    ?.let { (it - offsetMs).coerceAtLeast(0L) }
+                    ?: 0L
+                val displayBufferedPosition = (exoPlayer.bufferedPosition - offsetMs).coerceAtLeast(0L)
                 _state.value = _state.value.copy(
                     positionMs = displayPosition,
-                    durationMs = exoPlayer.duration.takeIf { it > 0L } ?: 0L,
-                    bufferedPositionMs = exoPlayer.bufferedPosition.coerceAtLeast(0L),
+                    durationMs = displayDuration,
+                    bufferedPositionMs = displayBufferedPosition,
                     isPlaying = exoPlayer.isPlaying,
                 )
                 handler.postDelayed(this, 1000L)
@@ -63,15 +73,20 @@ object PlaybackManager {
     private val commitSeekRunnable = Runnable {
         val target = pendingSeekPositionMs ?: return@Runnable
         if (::exoPlayer.isInitialized) {
-            Log.d(TAG, "commitSeek target=$target")
-            exoPlayer.seekTo(target)
+            val actualTarget = target + if (pendingSeekAddsTimelineOffset) activePlayback?.timelineOffsetMs ?: 0L else 0L
+            Log.d(TAG, "commitSeek target=$target actualTarget=$actualTarget addsTimelineOffset=$pendingSeekAddsTimelineOffset")
+            exoPlayer.seekTo(actualTarget)
         }
         pendingSeekPositionMs = null
+        pendingSeekAddsTimelineOffset = false
         handler.removeCallbacks(clearSeekPreviewRunnable)
         handler.postDelayed(clearSeekPreviewRunnable, SEEK_PREVIEW_DISMISS_DELAY_MS)
     }
     private val clearSeekPreviewRunnable = Runnable {
         _state.value = _state.value.copy(seekPreviewPositionMs = null)
+    }
+    private val closeAutoNextWindowRunnable = Runnable {
+        awaitingAutoNextUntilMs = 0L
     }
     private val hideControlsRunnable = Runnable {
         _state.value = _state.value.copy(controlsVisible = false)
@@ -118,16 +133,43 @@ object PlaybackManager {
                             Player.STATE_BUFFERING -> "Buffering media"
                             Player.STATE_READY -> "Ready for playback"
                             Player.STATE_ENDED -> {
-                                playNextDlnaRequestIfAvailable()
-                                "Playback finished"
+                                if (playNextDlnaRequestIfAvailable()) {
+                                    "Playing next media"
+                                } else {
+                                    openAutoNextWindow()
+                                    "Playback finished; waiting for next media"
+                                }
                             }
                             else -> _state.value.serviceMessage
                         }
                         _state.value = _state.value.copy(serviceMessage = message)
                     }
 
-                    override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                        Log.e(TAG, "playerError=${error.errorCodeName}", error)
+                    override fun onPlayerError(error: PlaybackException) {
+                        val playback = activePlayback
+                        val retryPlayback = playback?.takeIf {
+                            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED &&
+                                it.media.inferredFrom != "tencent-preroll-reject" &&
+                                !it.retried &&
+                                retriedPlaybackUris.add(it.request.uri)
+                        }
+                        Log.e(
+                            TAG,
+                            "playerError=${error.errorCodeName} uri=${playback?.request?.uri} " +
+                                "metadataMime=${playback?.request?.mimeType} finalMime=${playback?.media?.mimeType} retry=${retryPlayback != null}",
+                            error,
+                        )
+                        if (retryPlayback != null) {
+                            scope.launch {
+                                playStream(retryPlayback.request, retryPlayback.protocol, forceSniff = true, retried = true)
+                            }
+                        } else {
+                            _state.value = _state.value.copy(
+                                isPlaying = false,
+                                lastError = error.errorCodeName,
+                                serviceMessage = "Playback error: ${error.errorCodeName}",
+                            )
+                        }
                     }
                 })
             }
@@ -154,23 +196,33 @@ object PlaybackManager {
     }
 
     fun prepareDlnaRequest(request: ReceiverPlaybackRequest) {
+        val shouldAutoPlay = shouldAutoPlayPreparedDlnaRequest(request)
         pendingDlnaRequest = request
         _state.value = _state.value.copy(
             activeProtocol = ReceiverProtocol.Dlna,
-            serviceMessage = "DLNA media prepared",
+            serviceMessage = if (shouldAutoPlay) "Auto-playing next DLNA media" else "DLNA media prepared",
             title = request.title,
             uri = request.uri,
             mimeType = request.mimeType,
             lastError = null,
         )
+        if (shouldAutoPlay) {
+            awaitingAutoNextUntilMs = 0L
+            handler.removeCallbacks(closeAutoNextWindowRunnable)
+            handler.post {
+                Log.d(TAG, "autoPlayPreparedDlnaRequest uri=${request.uri}")
+                play(request, ReceiverProtocol.Dlna)
+            }
+        }
     }
 
-    fun prepareDlnaRequest(uri: String, title: String?, mimeType: String?) {
+    fun prepareDlnaRequest(uri: String, title: String?, mimeType: String?, metadata: String? = null) {
         prepareDlnaRequest(
             ReceiverPlaybackRequest(
                 uri = uri,
                 title = title,
                 mimeType = mimeType,
+                metadata = metadata,
             ),
         )
     }
@@ -180,12 +232,13 @@ object PlaybackManager {
         Log.d(TAG, "prepared next DLNA request uri=${request.uri}")
     }
 
-    fun prepareNextDlnaRequest(uri: String, title: String?, mimeType: String?) {
+    fun prepareNextDlnaRequest(uri: String, title: String?, mimeType: String?, metadata: String? = null) {
         prepareNextDlnaRequest(
             ReceiverPlaybackRequest(
                 uri = uri,
                 title = title,
                 mimeType = mimeType,
+                metadata = metadata,
             ),
         )
     }
@@ -200,14 +253,30 @@ object PlaybackManager {
 
     fun pendingNextDlnaRequestSnapshot(): ReceiverPlaybackRequest? = pendingNextDlnaRequest
 
-    fun playNextDlnaRequestIfAvailable() {
-        val request = pendingNextDlnaRequest ?: return
+    fun playNextDlnaRequestIfAvailable(): Boolean {
+        val request = pendingNextDlnaRequest ?: return false
         pendingNextDlnaRequest = null
         pendingDlnaRequest = request
+        awaitingAutoNextUntilMs = 0L
+        handler.removeCallbacks(closeAutoNextWindowRunnable)
         handler.post {
             Log.d(TAG, "playNextDlnaRequestIfAvailable uri=${request.uri}")
             play(request, ReceiverProtocol.Dlna)
         }
+        return true
+    }
+
+    private fun openAutoNextWindow() {
+        awaitingAutoNextUntilMs = System.currentTimeMillis() + AUTO_NEXT_WAIT_WINDOW_MS
+        handler.removeCallbacks(closeAutoNextWindowRunnable)
+        handler.postDelayed(closeAutoNextWindowRunnable, AUTO_NEXT_WAIT_WINDOW_MS)
+        Log.d(TAG, "openAutoNextWindow durationMs=$AUTO_NEXT_WAIT_WINDOW_MS")
+    }
+
+    private fun shouldAutoPlayPreparedDlnaRequest(request: ReceiverPlaybackRequest): Boolean {
+        val currentUri = activePlayback?.request?.uri ?: _state.value.uri
+        val waiting = awaitingAutoNextUntilMs > System.currentTimeMillis()
+        return waiting && request.uri.isNotBlank() && request.uri != currentUri
     }
 
     fun play(request: ReceiverPlaybackRequest, protocol: ReceiverProtocol) {
@@ -271,11 +340,18 @@ object PlaybackManager {
         handler.post {
             handler.removeCallbacks(commitSeekRunnable)
             handler.removeCallbacks(clearSeekPreviewRunnable)
+            handler.removeCallbacks(closeAutoNextWindowRunnable)
             handler.removeCallbacks(hideControlsRunnable)
             pendingSeekPositionMs = null
+            pendingSeekAddsTimelineOffset = false
             pendingNextDlnaRequest = null
+            awaitingAutoNextUntilMs = 0L
+            activePlayback = null
             if (::exoPlayer.isInitialized) {
+                exoPlayer.playWhenReady = false
+                exoPlayer.pause()
                 exoPlayer.stop()
+                exoPlayer.clearMediaItems()
             }
             _state.value = _state.value.copy(
                 mediaKind = ReceiverMediaKind.Idle,
@@ -298,11 +374,13 @@ object PlaybackManager {
     fun seekTo(positionMs: Long) {
         handler.post {
             if (!::exoPlayer.isInitialized || _state.value.mediaKind == ReceiverMediaKind.Image) return@post
-            val durationMs = exoPlayer.duration.takeIf { it > 0L }
+            val offsetMs = activePlayback?.timelineOffsetMs ?: 0L
+            val durationMs = exoPlayer.duration.takeIf { it > 0L }?.let { (it - offsetMs).coerceAtLeast(0L) }
             val target = positionMs.coerceAtLeast(0L).let { desired ->
                 durationMs?.let { desired.coerceAtMost(it) } ?: desired
             }
             pendingSeekPositionMs = target
+            pendingSeekAddsTimelineOffset = true
             _state.value = _state.value.copy(
                 positionMs = target,
                 seekPreviewPositionMs = target,
@@ -319,12 +397,14 @@ object PlaybackManager {
     fun seekBy(deltaMs: Long) {
         handler.post {
             if (!::exoPlayer.isInitialized || _state.value.mediaKind == ReceiverMediaKind.Image) return@post
-            val durationMs = exoPlayer.duration.takeIf { it > 0L }
-            val basePosition = pendingSeekPositionMs ?: exoPlayer.currentPosition
+            val offsetMs = activePlayback?.timelineOffsetMs ?: 0L
+            val durationMs = exoPlayer.duration.takeIf { it > 0L }?.let { (it - offsetMs).coerceAtLeast(0L) }
+            val basePosition = pendingSeekPositionMs ?: (exoPlayer.currentPosition - offsetMs).coerceAtLeast(0L)
             val target = (basePosition + deltaMs).coerceAtLeast(0L).let { desired ->
                 durationMs?.let { desired.coerceAtMost(it) } ?: desired
             }
             pendingSeekPositionMs = target
+            pendingSeekAddsTimelineOffset = true
             _state.value = _state.value.copy(
                 positionMs = target,
                 seekPreviewPositionMs = target,
@@ -378,24 +458,58 @@ object PlaybackManager {
         )
     }
 
-    private fun playStream(request: ReceiverPlaybackRequest, protocol: ReceiverProtocol) {
-        Log.d(TAG, "playStream uri=${request.uri}")
-        val kind = if ((request.mimeType ?: request.uri.guessMimeType()).startsWith("audio/")) {
+    private suspend fun playStream(
+        request: ReceiverPlaybackRequest,
+        protocol: ReceiverProtocol,
+        forceSniff: Boolean = false,
+        retried: Boolean = false,
+    ) {
+        val media = request.resolveMedia(forceSniff = forceSniff)
+        val timelineAdjustment = if (!retried) {
+            request.resolveTimelineAdjustment(media)
+        } else {
+            TimelineAdjustment()
+        }
+        if (timelineAdjustment.offsetMs > 0L) {
+            Log.w(
+                TAG,
+                "skipTencentPrerollTimeline uri=${request.uri} metadataMime=${request.mimeType} " +
+                    "finalMime=${media.mimeType} offsetMs=${timelineAdjustment.offsetMs} inferred=${timelineAdjustment.inferredFrom}",
+            )
+        }
+        val timelineOffsetMs = timelineAdjustment.offsetMs
+        val startPositionMs = timelineOffsetMs
+        val displayStartPositionMs = 0L
+        val metadataPreview = request.metadata?.take(240)?.replace(Regex("\\s+"), " ")
+        val uriParamsPreview = request.uri.queryParametersForLog()
+        val metadataFieldsPreview = request.metadata?.metadataFieldsForLog()
+        Log.d(
+            TAG,
+            "playStream uri=${request.uri} metadataMime=${request.mimeType} finalMime=${media.mimeType} " +
+                "inferred=${media.inferredFrom} retried=$retried timelineOffsetMs=$timelineOffsetMs " +
+                "displayStartPositionMs=$displayStartPositionMs startPositionMs=$startPositionMs " +
+                "uriParams=$uriParamsPreview metadataFields=$metadataFieldsPreview metadataPreview=$metadataPreview",
+        )
+        val kind = if ((media.mimeType ?: request.mimeType)?.startsWith("audio/") == true || request.uri.isLikelyAudioUri()) {
             ReceiverMediaKind.Audio
         } else {
             ReceiverMediaKind.Video
         }
 
-        val mediaItem = MediaItem.Builder()
+        val mediaItemBuilder = MediaItem.Builder()
             .setUri(request.uri)
-            .setMimeType(request.mimeType ?: request.uri.guessMimeType())
-            .build()
+        media.mimeType?.let(mediaItemBuilder::setMimeType)
+        val mediaItem = mediaItemBuilder.build()
 
-        exoPlayer.setMediaItem(mediaItem)
+        activePlayback = ActivePlayback(
+            request = request,
+            protocol = protocol,
+            media = media,
+            retried = retried,
+            timelineOffsetMs = timelineOffsetMs,
+        )
+        exoPlayer.setMediaItem(mediaItem, startPositionMs)
         exoPlayer.prepare()
-        if (request.startPositionMs > 0L) {
-            exoPlayer.seekTo(request.startPositionMs)
-        }
         exoPlayer.playWhenReady = true
         bringPlayerToFront()
 
@@ -404,9 +518,10 @@ object PlaybackManager {
             mediaKind = kind,
             title = request.title ?: Uri.parse(request.uri).lastPathSegment,
             uri = request.uri,
-            mimeType = request.mimeType ?: request.uri.guessMimeType(),
+            mimeType = media.mimeType ?: request.mimeType,
             imageBitmap = null,
             isPlaying = true,
+            positionMs = displayStartPositionMs,
             serviceMessage = "${protocol.label} playback started",
             lastError = null,
         )
@@ -421,18 +536,170 @@ object PlaybackManager {
     }
 }
 
+private data class ActivePlayback(
+    val request: ReceiverPlaybackRequest,
+    val protocol: ReceiverProtocol,
+    val media: ResolvedMedia,
+    val retried: Boolean,
+    val timelineOffsetMs: Long,
+)
+
+private data class ResolvedMedia(
+    val mimeType: String?,
+    val inferredFrom: String,
+)
+
+private data class TimelineAdjustment(
+    val offsetMs: Long = 0L,
+    val inferredFrom: String = "none",
+)
+
+private const val TENCENT_PREROLL_SKIP_MS = 15_500L
+private const val AUTO_NEXT_WAIT_WINDOW_MS = 45_000L
+private const val PLAYBACK_LOG_TAG = "OpenClawPlayback"
+
 private fun String.isLikelyImageUri(): Boolean = endsWith(".jpg", true) ||
     endsWith(".jpeg", true) ||
     endsWith(".png", true) ||
     endsWith(".webp", true)
 
-private fun String.guessMimeType(): String = when {
-    endsWith(".m3u8", true) -> MimeTypes.APPLICATION_M3U8
-    endsWith(".mp4", true) -> MimeTypes.VIDEO_MP4
-    endsWith(".mp3", true) -> MimeTypes.AUDIO_MPEG
-    endsWith(".m4a", true) -> MimeTypes.AUDIO_MP4
-    endsWith(".aac", true) -> MimeTypes.AUDIO_AAC
-    endsWith(".jpg", true) || endsWith(".jpeg", true) -> "image/jpeg"
-    endsWith(".png", true) -> "image/png"
-    else -> MimeTypes.APPLICATION_MP4
+private fun ReceiverPlaybackRequest.resolveMedia(forceSniff: Boolean = false): ResolvedMedia {
+    if (forceSniff) {
+        return ResolvedMedia(mimeType = uri.guessMimeTypeFromUriOnly(), inferredFrom = "retry-uri-or-sniff")
+    }
+    uri.guessMimeTypeFromUriOnly()?.let { return ResolvedMedia(mimeType = it, inferredFrom = "uri") }
+    mimeType?.takeIf { it.isSupportedMetadataMime() }?.let {
+        return ResolvedMedia(mimeType = it.normalizeMetadataMime(), inferredFrom = "metadata")
+    }
+    return ResolvedMedia(mimeType = null, inferredFrom = "sniff")
+}
+
+private fun ReceiverPlaybackRequest.isLikelyTencentPrerollHls(media: ResolvedMedia): Boolean {
+    val normalized = uri.lowercase()
+    return media.mimeType == MimeTypes.APPLICATION_M3U8 &&
+        normalized.contains("playproxy.video.qq.com") &&
+        normalized.contains("dlnam3u8") &&
+        normalized.contains("vt=2680")
+}
+
+private suspend fun ReceiverPlaybackRequest.resolveTimelineAdjustment(media: ResolvedMedia): TimelineAdjustment {
+    if (!isLikelyTencentPrerollHls(media)) {
+        return TimelineAdjustment()
+    }
+    val playlist = runCatching {
+        withContext(Dispatchers.IO) {
+            URL(uri).openStream().bufferedReader().use { it.readText() }
+        }
+    }.getOrElse { error ->
+        Log.w(PLAYBACK_LOG_TAG, "hlsPrerollProbeFailed uri=$uri fallbackMs=$TENCENT_PREROLL_SKIP_MS error=${error.message}")
+        return TimelineAdjustment(TENCENT_PREROLL_SKIP_MS, "tencent-fallback")
+    }
+    val offsetMs = playlist.detectLeadingDiscontinuityOffsetMs()
+    return if (offsetMs > 0L) {
+        TimelineAdjustment(offsetMs, "hls-leading-discontinuity")
+    } else {
+        TimelineAdjustment(TENCENT_PREROLL_SKIP_MS, "tencent-fallback-no-marker")
+    }
+}
+
+private fun String.detectLeadingDiscontinuityOffsetMs(): Long {
+    var pendingDurationMs: Long? = null
+    var accumulatedMs = 0L
+    var sawSegment = false
+    lineSequence()
+        .map { it.trim() }
+        .forEach { line ->
+            when {
+                line.startsWith("#EXTINF:", ignoreCase = true) -> {
+                    pendingDurationMs = line
+                        .substringAfter(':')
+                        .substringBefore(',')
+                        .toDoubleOrNull()
+                        ?.let { (it * 1000).toLong() }
+                }
+                line.startsWith("#EXT-X-DATERANGE", ignoreCase = true) && line.contains("DURATION=", ignoreCase = true) -> {
+                    return line
+                        .substringAfter("DURATION=", "")
+                        .substringBefore(',')
+                        .substringBefore(' ')
+                        .trim('"')
+                        .toDoubleOrNull()
+                        ?.let { (it * 1000).toLong() + 500L }
+                        ?: 0L
+                }
+                line.startsWith("#EXT-X-DISCONTINUITY", ignoreCase = true) && sawSegment && accumulatedMs > 0L -> {
+                    return accumulatedMs + 500L
+                }
+                line.isNotEmpty() && !line.startsWith("#") -> {
+                    pendingDurationMs?.let { accumulatedMs += it }
+                    pendingDurationMs = null
+                    sawSegment = true
+                }
+            }
+        }
+    return 0L
+}
+
+private fun String.queryParametersForLog(): String {
+    val parsed = runCatching { Uri.parse(this) }.getOrNull() ?: return "{}"
+    val names = parsed.queryParameterNames.sorted()
+    if (names.isEmpty()) return "{}"
+    return names.joinToString(prefix = "{", postfix = "}") { name ->
+        val value = parsed.getQueryParameter(name).orEmpty()
+        "$name=${value.take(120)}"
+    }
+}
+
+private fun String.metadataFieldsForLog(): String {
+    val compact = replace(Regex("\\s+"), " ")
+    val tags = Regex("<([A-Za-z0-9_:.-]+)(?:\\s[^>]*)?>([^<]{0,160})</\\1>")
+        .findAll(compact)
+        .map { "${it.groupValues[1]}=${it.groupValues[2].trim()}" }
+        .take(20)
+        .toList()
+    val attributes = Regex("([A-Za-z0-9_:.-]+)=\"([^\"]{0,160})\"")
+        .findAll(compact)
+        .map { "${it.groupValues[1]}=${it.groupValues[2].trim()}" }
+        .take(30)
+        .toList()
+    return (tags + attributes).joinToString(prefix = "{", postfix = "}")
+}
+
+private fun String.guessMimeTypeFromUriOnly(): String? {
+    val normalized = substringBefore('#').lowercase()
+    val path = normalized.substringBefore('?')
+    val query = normalized.substringAfter('?', missingDelimiterValue = "")
+    return when {
+        path.endsWith(".m3u8") || normalized.contains("dlnam3u8") || query.contains("m3u8") -> MimeTypes.APPLICATION_M3U8
+        path.endsWith(".mpd") -> MimeTypes.APPLICATION_MPD
+        path.endsWith(".ism") || path.endsWith(".ism/manifest") || path.endsWith("/manifest") -> MimeTypes.APPLICATION_SS
+        path.endsWith(".mp4") || path.endsWith(".m4v") || path.endsWith(".mov") -> MimeTypes.VIDEO_MP4
+        path.endsWith(".ts") -> MimeTypes.VIDEO_MP2T
+        path.endsWith(".mp3") -> MimeTypes.AUDIO_MPEG
+        path.endsWith(".m4a") -> MimeTypes.AUDIO_MP4
+        path.endsWith(".aac") -> MimeTypes.AUDIO_AAC
+        path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
+        path.endsWith(".png") -> "image/png"
+        else -> null
+    }
+}
+
+private fun String.isLikelyAudioUri(): Boolean {
+    val path = substringBefore('?').substringBefore('#').lowercase()
+    return path.endsWith(".mp3") || path.endsWith(".m4a") || path.endsWith(".aac")
+}
+
+private fun String.isSupportedMetadataMime(): Boolean = startsWith("video/") ||
+    startsWith("audio/") ||
+    startsWith("image/") ||
+    this == MimeTypes.APPLICATION_M3U8 ||
+    this == MimeTypes.APPLICATION_MPD ||
+    this == MimeTypes.APPLICATION_SS ||
+    this == "application/vnd.apple.mpegurl" ||
+    this == "audio/mpegurl" ||
+    this == "audio/x-mpegurl"
+
+private fun String.normalizeMetadataMime(): String = when (lowercase()) {
+    "application/vnd.apple.mpegurl", "audio/mpegurl", "audio/x-mpegurl" -> MimeTypes.APPLICATION_M3U8
+    else -> this
 }

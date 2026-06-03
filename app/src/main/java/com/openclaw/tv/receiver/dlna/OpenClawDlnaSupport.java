@@ -27,7 +27,8 @@ final class OpenClawDlnaSupport {
         PlaybackManager.INSTANCE.prepareDlnaRequest(
                 uri,
                 extractTitle(metadata, uri),
-                extractMimeType(metadata)
+                extractMimeType(metadata),
+                metadata
         );
     }
 
@@ -39,7 +40,8 @@ final class OpenClawDlnaSupport {
         PlaybackManager.INSTANCE.prepareNextDlnaRequest(
                 uri,
                 extractTitle(metadata, uri),
-                extractMimeType(metadata)
+                extractMimeType(metadata),
+                metadata
         );
     }
 

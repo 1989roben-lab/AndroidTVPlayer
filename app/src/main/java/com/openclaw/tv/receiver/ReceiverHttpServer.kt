@@ -98,6 +98,7 @@ class ReceiverHttpServer(
                         uri = htmlDecode(uri),
                         title = parseDlnaTitle(meta),
                         mimeType = parseDlnaMimeType(meta),
+                        metadata = meta,
                     ),
                 )
                 dlnaActionResponse("u:SetAVTransportURIResponse")

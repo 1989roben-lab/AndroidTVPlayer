@@ -1,5 +1,8 @@
 package com.openclaw.tv
 
+import android.graphics.Color as AndroidColor
+import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -47,6 +50,9 @@ import com.openclaw.tv.receiver.ReceiverState
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setFormat(PixelFormat.OPAQUE)
+        window.setBackgroundDrawable(ColorDrawable(AndroidColor.BLACK))
+        window.decorView.setBackgroundColor(AndroidColor.BLACK)
         Log.i("OpenClaw", "MainActivity.onCreate")
         PlaybackManager.ensureInitialized(applicationContext)
         if (!ReceiverRuntime.isStarted()) {
@@ -102,9 +108,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (isFinishing) {
-            PlaybackManager.stop()
-        }
+        PlaybackManager.stop()
+    }
+
+    override fun onDestroy() {
+        PlaybackManager.stop()
+        super.onDestroy()
     }
 }
 

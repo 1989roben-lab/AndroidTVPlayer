@@ -19,6 +19,7 @@ data class ReceiverPlaybackRequest(
     val uri: String,
     val title: String? = null,
     val mimeType: String? = null,
+    val metadata: String? = null,
     val headers: Map<String, String> = emptyMap(),
     val startPositionMs: Long = 0L,
 )
